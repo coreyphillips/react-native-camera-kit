@@ -5,27 +5,13 @@
 #import <React/UIView+React.h>
 #import <React/RCTConvert.h>
 #else
-#import "UIView+React.h"
-#import "RCTConvert.h"
+#import <React/UIView+React.h>
+#import <React/RCTConvert.h>
 #endif
 
 #import "CKCamera.h"
 #import "CKCameraOverlayView.h"
 #import "CKMockPreview.h"
-
-AVCaptureVideoOrientation AVCaptureVideoOrientationFromInterfaceOrientation(UIInterfaceOrientation orientation){
-    if (orientation == UIInterfaceOrientationPortrait) {
-        return AVCaptureVideoOrientationPortrait;
-    } else if (orientation == UIInterfaceOrientationLandscapeLeft){
-        return AVCaptureVideoOrientationLandscapeLeft;
-    } else if (orientation == UIInterfaceOrientationLandscapeRight){
-        return AVCaptureVideoOrientationLandscapeRight;
-    } else if (orientation == UIInterfaceOrientationPortraitUpsideDown){
-        return AVCaptureVideoOrientationPortraitUpsideDown;
-    } else {
-        @throw @"unknown interface orientation";
-    }
-}
 
 static void * CapturingStillImageContext = &CapturingStillImageContext;
 static void * SessionRunningContext = &SessionRunningContext;
@@ -141,7 +127,6 @@ RCT_ENUM_CONVERTER(CKCameraZoomMode, (@{
 - (void)dealloc
 {
     [self removeObservers];
-    [[UIDevice currentDevice] endGeneratingDeviceOrientationNotifications];
 }
 
 -(PHFetchOptions *)fetchOptions {
@@ -196,18 +181,18 @@ RCT_ENUM_CONVERTER(CKCameraZoomMode, (@{
         // Communicate with the session and other session objects on this queue.
         self.sessionQueue = dispatch_queue_create( "session queue", DISPATCH_QUEUE_SERIAL );
 
-        [self handleCameraPermission];
-
+#if !(TARGET_IPHONE_SIMULATOR)
+        [self setupCaptureSession];
+#endif
+        self.previewLayer = [[AVCaptureVideoPreviewLayer alloc] initWithSession:self.session];
+        [self.layer addSublayer:self.previewLayer];
+        self.previewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+        
 #if (TARGET_IPHONE_SIMULATOR)
         // Create mock camera layer. When a photo is taken, we capture this layer and save it in place of a
         // hardware input.
         self.mockPreview = [[CKMockPreview alloc] initWithFrame:CGRectZero];
         [self addSubview:self.mockPreview];
-#else
-        self.previewLayer = [[AVCaptureVideoPreviewLayer alloc] initWithSession:self.session];
-        [self.layer addSublayer:self.previewLayer];
-        self.previewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
-        [self setupCaptureSession];
 #endif
         
         UIView *focusView = [[UIView alloc] initWithFrame:CGRectZero];
@@ -404,48 +389,8 @@ RCT_ENUM_CONVERTER(CKCameraZoomMode, (@{
         }
 
         [self.session commitConfiguration];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [self setInitialPreviewLayerVideoOrientation];
-        });
+
     } );
-}
-
-- (void)setInitialPreviewLayerVideoOrientation{
-    UIInterfaceOrientation initialInterfaceOrientation = [UIApplication sharedApplication].statusBarOrientation;
-    self.previewLayer.connection.videoOrientation = AVCaptureVideoOrientationFromInterfaceOrientation(initialInterfaceOrientation);
-}
-
--(void)handleCameraPermission {
-
-    switch ( [AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo] )
-    {
-        case AVAuthorizationStatusAuthorized:
-        {
-            // The user has previously granted access to the camera.
-            break;
-        }
-        case AVAuthorizationStatusNotDetermined:
-        {
-            // The user has not yet been presented with the option to grant video access.
-            // We suspend the session queue to delay session setup until the access request has completed to avoid
-            // asking the user for audio access if video access is denied.
-            // Note that audio access will be implicitly requested when we create an AVCaptureDeviceInput for audio during session setup.
-            dispatch_suspend( self.sessionQueue );
-            [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo completionHandler:^( BOOL granted ) {
-                if ( ! granted ) {
-                    self.setupResult = CKSetupResultCameraNotAuthorized;
-                }
-                dispatch_resume( self.sessionQueue );
-            }];
-            break;
-        }
-        default:
-        {
-            // The user has previously denied access.
-            self.setupResult = CKSetupResultCameraNotAuthorized;
-            break;
-        }
-    }
 }
 
 -(void)reactSetFrame:(CGRect)frame {
@@ -461,50 +406,18 @@ RCT_ENUM_CONVERTER(CKCameraZoomMode, (@{
     [self setOverlayRatioView];
 
     dispatch_async( self.sessionQueue, ^{
-        switch ( self.setupResult )
-        {
-            case CKSetupResultSuccess:
-            {
-                // Only setup observers and start the session running if setup succeeded.
-                [self addObservers];
-                [self.session startRunning];
-                self.sessionRunning = self.session.isRunning;
-                if (self.showFrame) {
-                    dispatch_async(dispatch_get_main_queue(), ^{
-                        [self addFrameForScanner];
-                    });
-                }
-                break;
-            }
-            case CKSetupResultCameraNotAuthorized:
-            {
-                //                dispatch_async( dispatch_get_main_queue(), ^{
-                //                    NSString *message = NSLocalizedString( @"AVCam doesn't have permission to use the camera, please change privacy settings", @"Alert message when the user has denied access to the camera" );
-                //                    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"AVCam" message:message preferredStyle:UIAlertControllerStyleAlert];
-                //                    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:NSLocalizedString( @"OK", @"Alert OK button" ) style:UIAlertActionStyleCancel handler:nil];
-                //                    [alertController addAction:cancelAction];
-                //                    // Provide quick access to Settings.
-                //                    UIAlertAction *settingsAction = [UIAlertAction actionWithTitle:NSLocalizedString( @"Settings", @"Alert button to open Settings" ) style:UIAlertActionStyleDefault handler:^( UIAlertAction *action ) {
-                //                        [[UIApplication sharedApplication] openURL:[NSURL URLWithString:UIApplicationOpenSettingsURLString]];
-                //                    }];
-                //                    [alertController addAction:settingsAction];
-                //                    [self presentViewController:alertController animated:YES completion:nil];
-                //                } );
-                break;
-            }
-            case CKSetupResultSessionConfigurationFailed:
-            {
-                //                dispatch_async( dispatch_get_main_queue(), ^{
-                //                    NSString *message = NSLocalizedString( @"Unable to capture media", @"Alert message when something goes wrong during capture session configuration" );
-                //                    UIAlertController *alertController = [UIAlertController alertControllerWithTitle:@"AVCam" message:message preferredStyle:UIAlertControllerStyleAlert];
-                //                    UIAlertAction *cancelAction = [UIAlertAction actionWithTitle:NSLocalizedString( @"OK", @"Alert OK button" ) style:UIAlertActionStyleCancel handler:nil];
-                //                    [alertController addAction:cancelAction];
-                //                    [self presentViewController:alertController animated:YES completion:nil];
-                //                } );
-                break;
+        if (self.setupResult == CKSetupResultSuccess) {
+            // Only setup observers and start the session running if setup succeeded.
+            [self addObservers];
+            [self.session startRunning];
+            self.sessionRunning = self.session.isRunning;
+            if (self.showFrame) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self addFrameForScanner];
+                });
             }
         }
-    } );
+    });
 }
 
 -(void)setRatioOverlay:(NSString *)ratioOverlay {
@@ -593,11 +506,11 @@ RCT_ENUM_CONVERTER(CKCameraZoomMode, (@{
 
 - (void)capturePreviewLayer:(NSDictionary*)options success:(CaptureBlock)onSuccess onError:(void (^)(NSString*))onError
 {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    dispatch_async( self.sessionQueue, ^{
         if (self.mockPreview != nil) {
             UIImage *previewSnapshot = [self.mockPreview snapshotWithTimestamp:YES]; // Generate snapshot from main UI thread
             dispatch_async( self.sessionQueue, ^{ // write image async
-                [self writeCapturedImageData:UIImageJPEGRepresentation(previewSnapshot, 0.85) onSuccess:onSuccess onError:onError];
+                [self writeCapturedImageData:UIImagePNGRepresentation(previewSnapshot) onSuccess:onSuccess onError:onError];
             });
         } else {
             onError(@"Simulator image could not be captured from preview layer");
@@ -669,9 +582,16 @@ RCT_ENUM_CONVERTER(CKCameraZoomMode, (@{
 }
 
 +(NSURL*)saveToTmpFolder:(NSData*)data {
+    NSFileManager *fs = [NSFileManager defaultManager];
+    NSString *bundleIdentifier = [[NSBundle mainBundle] bundleIdentifier];
+    NSURL *cacheDir = [[fs URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask] firstObject];
+    NSURL *appCacheDir = [[cacheDir URLByAppendingPathComponent:bundleIdentifier isDirectory:YES] URLByAppendingPathComponent:@"com.rncamerakit" isDirectory:YES];
+    NSError *createErr = nil;
+    if (![fs createDirectoryAtURL:appCacheDir withIntermediateDirectories:YES attributes:nil error:&createErr]) {
+        NSLog(@"Error occured while creating a temporary directory for images: %@", createErr);
+    }
     NSString *temporaryFileName = [NSProcessInfo processInfo].globallyUniqueString;
-    NSString *temporaryFilePath = [NSTemporaryDirectory() stringByAppendingPathComponent:[temporaryFileName stringByAppendingPathExtension:@"jpg"]];
-    NSURL *temporaryFileURL = [NSURL fileURLWithPath:temporaryFilePath];
+    NSURL *temporaryFileURL = [appCacheDir URLByAppendingPathComponent:[temporaryFileName stringByAppendingPathExtension:@"jpg"] isDirectory:NO];
 
     NSError *error = nil;
     [data writeToURL:temporaryFileURL options:NSDataWritingAtomic error:&error];
@@ -954,10 +874,6 @@ RCT_ENUM_CONVERTER(CKCameraZoomMode, (@{
 
 #pragma mark - observers
 
-- (void)didChangeStatusBarOrientation:(NSNotification *)notification {
-    UIInterfaceOrientation currentInterfaceOrientation = [UIApplication sharedApplication].statusBarOrientation;
-    self.previewLayer.connection.videoOrientation = AVCaptureVideoOrientationFromInterfaceOrientation(currentInterfaceOrientation);
-}
 
 - (void)addObservers
 {
@@ -982,10 +898,7 @@ RCT_ENUM_CONVERTER(CKCameraZoomMode, (@{
                                                  selector:@selector(willEnterForeground:)
                                                      name:UIApplicationWillEnterForegroundNotification
                                                    object:nil];
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(didChangeStatusBarOrientation:)
-                                                     name:UIApplicationDidChangeStatusBarOrientationNotification
-                                                   object:nil];
+
         self.isAddedOberver = YES;
     }
 }

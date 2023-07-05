@@ -1,13 +1,13 @@
 import React from 'react';
+import _update from 'lodash/update';
 import _cloneDeep from 'lodash/cloneDeep';
 import { requireNativeComponent, findNodeHandle, NativeModules, processColor } from 'react-native';
 import { CameraApi } from './types';
-import { CameraProps } from './Camera';
 
 const { RNCameraKitModule } = NativeModules;
 const NativeCamera = requireNativeComponent('CKCameraManager');
 
-const Camera = React.forwardRef((props: CameraProps, ref) => {
+const Camera = React.forwardRef((props: any, ref) => {
   const nativeRef = React.useRef();
 
   React.useImperativeHandle<any, CameraApi>(ref, () => ({
@@ -15,9 +15,6 @@ const Camera = React.forwardRef((props: CameraProps, ref) => {
       // Because RN doesn't support return types for ViewManager methods
       // we must use the general module and tell it what View it's supposed to be using
       return await RNCameraKitModule.capture(options, findNodeHandle(nativeRef.current ?? null));
-    },
-    setTorchMode: (mode = 'off') => {
-      RNCameraKitModule.setTorchMode(mode, findNodeHandle(nativeRef.current ?? null));
     },
     requestDeviceCameraAuthorization: () => {
       throw new Error('Not implemented');
@@ -27,10 +24,11 @@ const Camera = React.forwardRef((props: CameraProps, ref) => {
     },
   }));
 
-  const transformedProps: CameraProps = _cloneDeep(props);
-  transformedProps.ratioOverlayColor = processColor(props.ratioOverlayColor);
-  transformedProps.frameColor = processColor(props.frameColor);
-  transformedProps.laserColor = processColor(props.laserColor);
+  const transformedProps = _cloneDeep(props);
+  _update(transformedProps, 'cameraOptions.ratioOverlayColor', (c) => processColor(c));
+  _update(transformedProps, 'frameColor', (c) => processColor(c));
+  _update(transformedProps, 'laserColor', (c) => processColor(c));
+  _update(transformedProps, 'surfaceColor', (c) => processColor(c));
 
   return (
     <NativeCamera
